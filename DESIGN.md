@@ -1,103 +1,165 @@
 # codegen-infra Design Doc
 
-<!-- agent-updated: 2026-04-04T00:00:00Z -->
+<!-- agent-updated: 2026-04-05T05:15:00Z -->
 
 ## Overview
 
-Unified code generation infrastructure for Rust. A low-level library providing shared primitives for code generation across multiple schema formats.
+Unified code generation framework providing **M schema formats × N target languages** via a shared Intermediate Representation (IR).
 
-## Goals
-
-1. **Zero external dependencies** in core (except `thiserror` for derive)
-2. **Feature-gated modules** for different schema formats
-3. **Schema-agnostic IR** that adapters can convert to
-4. **Composable codegen** - adapters produce IR, generators consume IR
+**Current status:** All adapters and code writers implemented. 55 tests passing.
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        codegen-infra                            │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐     │
-│  │   Adapter    │    │   Adapter    │    │   Adapter    │     │
-│  │ (FlatBuffers)│    │ (Protobuf)   │    │ (Quiver-ORM) │     │
-│  └──────┬───────┘    └──────┬───────┘    └──────┬───────┘     │
-│         │                   │                   │              │
-│         ▼                   ▼                   ▼              │
-│  ┌─────────────────────────────────────────────────────────┐  │
-│  │                    IR (SchemaProvider)                 │  │
-│  │  ServiceDef, MethodDef, MessageDef, FieldDef, Type      │  │
-│  └─────────────────────────────────────────────────────────┘  │
-│                           │                                    │
-│                           ▼                                    │
-│  ┌─────────────────────────────────────────────────────────┐  │
-│  │              Code Writers (Rust, Dart, TS)              │  │
-│  └─────────────────────────────────────────────────────────┘  │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
+                         Schema Formats
+        ┌─────────────┬─────────────┬─────────────┐
+        │ FlatBuffers │  Protobuf  │  Quiver-ORM │
+        │   (.fbs)    │  (.proto)  │  (.quiver)  │
+        └──────┬──────┴──────┬─────┴──────┬──────┘
+               │             │            │
+               ▼             ▼            ▼
+        ┌─────────────────────────────────────────┐
+        │              Adapters (M)               │
+        │  FlatBuffersSchema  ProtobufSchema  ...  │
+        └────────────────────┬────────────────────┘
+                             │
+                             ▼
+        ┌─────────────────────────────────────────┐
+        │            codegen-core                 │
+        │                                         │
+        │  ┌─────────────────────────────────┐   │
+        │  │   Intermediate Representation    │   │
+        │  │   ServiceDef, MessageDef,       │   │
+        │  │   FieldDef, EnumDef, Type       │   │
+        │  └─────────────────────────────────┘   │
+        │                                         │
+        │  ┌─────────────────────────────────┐   │
+        │  │   SchemaProvider trait           │   │
+        │  └─────────────────────────────────┘   │
+        │                                         │
+        │  ┌─────────────────────────────────┐   │
+        │  │   CodeWriter trait              │   │
+        │  └─────────────────────────────────┘   │
+        └────────────────────┬────────────────────┘
+                             │
+                             ▼
+        ┌─────────────────────────────────────────┐
+        │           Code Writers (N)               │
+        │   RustCodeWriter  DartCodeWriter  TS    │
+        └─────────────────────────────────────────┘
 ```
 
 ## Modules
 
-### codegen-core
-
-Shared primitives with **zero external dependencies** (except `thiserror`).
-
 ```
-codegen-core/
-├── src/
-│   ├── lib.rs          # Public exports
-│   ├── code_writer.rs  # Indentation-aware code generation
-│   ├── error.rs        # CodeGenError enum
-│   └── ir/             # Intermediate Representation types
-│       ├── mod.rs
-│       ├── service.rs  # ServiceDef, MethodDef
-│       ├── message.rs  # MessageDef
-│       ├── field.rs    # FieldDef
-│       ├── type.rs     # ScalarType, Type
-│       └── schema.rs   # SchemaProvider trait, EnumDef
+codegen-infra/
+├── codegen-core/          # Shared IR + traits (zero external deps)
+│   └── src/
+│       ├── lib.rs
+│       ├── code_writer.rs # Indentation-aware code generation
+│       ├── error.rs       # CodeWriterError
+│       └── ir/           # Intermediate Representation
+│           ├── mod.rs     # Re-exports
+│           ├── type.rs    # ScalarType, Type
+│           ├── field.rs   # FieldDef
+│           ├── message.rs # MessageDef
+│           ├── service.rs # ServiceDef, MethodDef
+│           └── schema.rs # SchemaProvider trait, EnumDef
+│
+├── codegen-flatbuffers/   # Adapter: FlatBuffers → IR
+├── codegen-protobuf/      # Adapter: Protobuf → IR
+├── codegen-quiver/        # Adapter: Quiver-ORM → IR
+│
+└── codegen-writers/       # Code generators: IR → target language
+    └── src/
+        ├── lib.rs         # to_snake_case, to_pascal_case, to_camel_case
+        ├── rust.rs        # RustCodeWriter
+        ├── dart.rs        # DartCodeWriter
+        └── typescript.rs  # TypeScriptCodeWriter
 ```
 
-### codegen-flatbuffers
+## Design Decisions
 
-FlatBuffers schema adapter - converts `ResolvedSchema` to IR.
+### 1. Raw Strings over syn
 
-### codegen-protobuf
+**Decision:** Use raw strings via `CodeWriter` instead of `syn` AST manipulation.
 
-Protobuf schema adapter - converts `FileDescriptorProto` to IR.
+**Rationale:**
+- Simpler mental model - no AST complexity
+- No external dependencies in codegen-core
+- Sufficient for generating clean, formatted code
+- `syn` can be added later if needed for complex Rust-specific generation
 
-### codegen-quiver
+**CodeWriter API:**
+```rust
+let mut w = CodeWriter::new();
+w.line("// Generated code");
+w.block("struct Foo {", |w| {
+    w.line("field: i32,");
+});
+```
 
-Quiver-ORM schema adapter - converts Quiver model definitions to IR.
+### 2. Naming Convention Normalization
 
-## IR Types
+**Decision:** Adapters normalize schema-specific names to IR strings. Code writers handle target-language casing.
 
-### ServiceDef
+**Approach:**
+- IR stores original names as-is
+- `to_snake_case()`, `to_pascal_case()`, `to_camel_case()` helpers in code writers
+- Each code writer applies appropriate casing for target language
+
+**Example mappings:**
+
+| Schema | Type Name | IR | Rust | Dart | TypeScript |
+|--------|-----------|-----|------|------|------------|
+| FlatBuffers | MyTable | "MyTable" | `struct MyTable` | `class MyTable` | `interface MyTable` |
+| Protobuf | MyMessage | "MyMessage" | `struct MyMessage` | `class MyMessage` | `interface MyMessage` |
+| Quiver | my_table | "my_table" | `struct MyTable` | `class MyTable` | `interface MyTable` |
+
+### 3. Buffer over File Output
+
+**Decision:** `CodeWriter` generates to `String` buffer. Caller handles filesystem.
+
+**Rationale:**
+- Separation of concerns - code generation is independent of I/O
+- Easier to test - just check the string content
+- Enables composable workflows (generate → transform → write)
+
+**Output pattern:**
+```rust
+let code = writer.write_file(&messages, &enums, &services)?;
+std::fs::write("output.rs", code)?;
+```
+
+## Intermediate Representation (IR)
+
+### SchemaProvider Trait
 
 ```rust
-pub struct ServiceDef {
-    pub name: String,           // e.g., "Greeter"
-    pub package: String,        // e.g., "helloworld"
-    pub proto_name: String,     // e.g., "Greeter"
-    pub methods: Vec<MethodDef>,
-    pub comments: Vec<String>,
+pub trait SchemaProvider {
+    fn messages(&self) -> Vec<MessageDef>;
+    fn services(&self) -> Vec<ServiceDef>;
+    fn enums(&self) -> Vec<EnumDef>;
+    fn file_ident(&self) -> Option<&str>;
+    fn root_table(&self) -> Option<&str>;
 }
 ```
 
-### MethodDef
+### Type
 
 ```rust
-pub struct MethodDef {
-    pub name: String,            // snake_case: "say_hello"
-    pub proto_name: String,      // PascalCase: "SayHello"
-    pub input_type: String,      // e.g., "crate::HelloRequest"
-    pub output_type: String,      // e.g., "crate::HelloReply"
-    pub client_streaming: bool,
-    pub server_streaming: bool,
-    pub codec_path: String,      // e.g., "crate::codec::Codec"
-    pub comments: Vec<String>,
+pub enum ScalarType {
+    Bool, Int8, Uint8, Int16, Uint16,
+    Int32, Uint32, Int64, Uint64,
+    Float32, Float64, String, Bytes,
+}
+
+pub enum Type {
+    Scalar(ScalarType),
+    Message { name: String, package: Option<String> },
+    Enum { name: String, package: Option<String> },
+    Vector(Box<Type>),
+    InlineStruct(Box<Type>),
 }
 ```
 
@@ -120,27 +182,26 @@ pub struct FieldDef {
     pub name: String,
     pub ty: Type,
     pub is_optional: bool,
-    pub default_value: Option<String>,
-    pub id: Option<u32>,         // FlatBuffers field ID
     pub comments: Vec<String>,
 }
 ```
 
-### Type
+### ServiceDef
 
 ```rust
-pub enum Type {
-    Scalar(ScalarType),
-    Message { name: String, package: Option<String> },
-    Enum { name: String, package: Option<String> },
-    Vector(Box<Type>),
-    InlineStruct(Box<Type>),
+pub struct ServiceDef {
+    pub name: String,
+    pub methods: Vec<MethodDef>,
+    pub package: Option<String>,
+    pub comments: Vec<String>,
 }
 
-pub enum ScalarType {
-    Bool, Int8, Uint8, Int16, Uint16,
-    Int32, Uint32, Int64, Uint64,
-    Float32, Float64, String, Bytes,
+pub struct MethodDef {
+    pub name: String,
+    pub input_type: String,
+    pub output_type: String,
+    pub client_streaming: bool,
+    pub server_streaming: bool,
 }
 ```
 
@@ -163,38 +224,36 @@ pub struct EnumValue {
 }
 ```
 
-## SchemaProvider Trait
+## CodeWriter Trait
 
 ```rust
-pub trait SchemaProvider {
-    fn messages(&self) -> Vec<MessageDef>;
-    fn services(&self) -> Vec<ServiceDef>;
-    fn enums(&self) -> Vec<EnumDef>;
-    fn file_ident(&self) -> Option<&str>;
-    fn root_table(&self) -> Option<&str>;
+pub trait CodeWriter {
+    fn write_message(&mut self, msg: &MessageDef) -> Result<String, CodeWriterError>;
+    fn write_enum(&mut self, enm: &EnumDef) -> Result<String, CodeWriterError>;
+    fn write_service(&mut self, svc: &ServiceDef) -> Result<String, CodeWriterError>;
+    fn write_file(&mut self, messages: &[MessageDef], enums: &[EnumDef], services: &[ServiceDef]) -> Result<String, CodeWriterError>;
 }
-```
-
-## CodeWriter
-
-Indentation-aware code generation:
-
-```rust
-let mut writer = CodeWriter::new();
-writer.block("struct MyService", |w| {
-    w.line("fn new() -> Self {");
-    w.indent();
-    w.line("Self {}");
-    w.dedent();
-    w.line("}");
-});
-let code = writer.finish();
 ```
 
 ## Feature Flags
 
-- `codegen-core`: `grpc` - enables gRPC-specific IR types
-- `codegen-flatbuffers`: `grpc` - enables gRPC service support
+| Flag | Enables | Dependencies |
+|------|---------|--------------|
+| (default) | Core IR, no adapters | `thiserror` |
+| `flatbuffers` | FlatBuffers adapter | `codegen-core`, `flatc-rs-schema` |
+| `protobuf` | Protobuf adapter | `codegen-core`, `prost-types` |
+| `quiver` | Quiver-ORM adapter | `codegen-core` |
+| `writers` | All code writers (Rust, Dart, TS) | `codegen-core` |
+
+## Consumer Projects
+
+Projects using codegen-infra:
+
+| Project | Status | Adapters Used |
+|---------|--------|---------------|
+| flatbuffers-rs | Using | flatbuffers |
+| protobuf-rs | Using | protobuf |
+| quiver-orm | Using | quiver |
 
 ## Dependencies
 
@@ -205,20 +264,26 @@ let code = writer.finish();
 - `codegen-core`
 - `flatc-rs-schema` (git dependency)
 
-## Design Principles
+### codegen-protobuf
+- `codegen-core`
+- `prost-types`
 
-1. **Adapter Pattern**: Each schema format has its own adapter that produces IR
-2. **Trait-Based**: `SchemaProvider` trait allows any schema format to plug in
-3. **Owned Data**: `SchemaProvider` returns owned `Vec<T>` to avoid lifetime issues
-4. **Zero-Copy IR**: IR types own their data (String, Vec) for simplicity
-5. **Error Handling**: `CodeGenError` enum with `thiserror` derive
+### codegen-quiver
+- `codegen-core`
 
 ## TODO
 
-- [ ] Add more scalar type mappings (bytes, etc.)
-- [ ] Implement protobuf adapter
-- [ ] Implement quiver-orm adapter
-- [ ] Add Rust code writer
-- [ ] Add Dart code writer
-- [ ] Add TypeScript code writer
-- [ ] Add gRPC-specific IR types behind feature flag
+- [x] SchemaProvider trait
+- [x] IR types (ServiceDef, MethodDef, MessageDef, FieldDef, EnumDef, Type)
+- [x] CodeWriter trait
+- [x] FlatBuffers adapter
+- [x] Protobuf adapter
+- [x] Quiver-ORM adapter
+- [x] Rust code writer
+- [x] Dart code writer
+- [x] TypeScript code writer
+- [x] Integration tests
+- [ ] Go code writer
+- [ ] Python code writer
+- [ ] Streaming RPC support in IR
+- [ ] One-of/unions handling across languages
