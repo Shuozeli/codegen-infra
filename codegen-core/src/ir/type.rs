@@ -1,0 +1,90 @@
+//! Type representations.
+
+use std::fmt;
+
+/// Represents a scalar type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ScalarType {
+    Bool,
+    Int8,
+    Uint8,
+    Int16,
+    Uint16,
+    Int32,
+    Uint32,
+    Int64,
+    Uint64,
+    Float32,
+    Float64,
+    String,
+    Bytes,
+}
+
+impl fmt::Display for ScalarType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ScalarType::Bool => write!(f, "bool"),
+            ScalarType::Int8 => write!(f, "int8"),
+            ScalarType::Uint8 => write!(f, "uint8"),
+            ScalarType::Int16 => write!(f, "int16"),
+            ScalarType::Uint16 => write!(f, "uint16"),
+            ScalarType::Int32 => write!(f, "int32"),
+            ScalarType::Uint32 => write!(f, "uint32"),
+            ScalarType::Int64 => write!(f, "int64"),
+            ScalarType::Uint64 => write!(f, "uint64"),
+            ScalarType::Float32 => write!(f, "float32"),
+            ScalarType::Float64 => write!(f, "float64"),
+            ScalarType::String => write!(f, "string"),
+            ScalarType::Bytes => write!(f, "bytes"),
+        }
+    }
+}
+
+/// Represents a type in the schema.
+#[derive(Debug, Clone)]
+pub enum Type {
+    /// A scalar type.
+    Scalar(ScalarType),
+    /// A named message/struct type.
+    Message {
+        name: String,
+        package: Option<String>,
+    },
+    /// An enum type.
+    Enum {
+        name: String,
+        package: Option<String>,
+    },
+    /// A vector/array of elements.
+    Vector(Box<Type>),
+    /// A nested struct/table (inline in FlatBuffers).
+    InlineStruct(Box<Type>),
+}
+
+impl fmt::Display for Type {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Type::Scalar(s) => write!(f, "{}", s),
+            Type::Message { name, .. } => write!(f, "{}", name),
+            Type::Enum { name, .. } => write!(f, "{}", name),
+            Type::Vector(inner) => write!(f, "Vec<{}>", inner),
+            Type::InlineStruct(inner) => write!(f, "{}", inner),
+        }
+    }
+}
+
+impl Type {
+    /// Returns true if this is a scalar type.
+    pub fn is_scalar(&self) -> bool {
+        matches!(self, Type::Scalar(_))
+    }
+
+    /// Get the inner type for vector types.
+    pub fn element_type(&self) -> Option<&Type> {
+        match self {
+            Type::Vector(inner) => Some(inner),
+            _ => None,
+        }
+    }
+}

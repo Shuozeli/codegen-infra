@@ -1,0 +1,13 @@
+[package]
+name = "codegen-flatbuffers"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+codegen-core = { path = "../codegen-core" }
+flatc-rs-schema = { git = "https://github.com/Shuozeli/flatbuffers-rs.git", package = "flatc-rs-schema" }
+thiserror = "2"
+
+[features]
+default = []
+grpc = ["codegen-core/grpc"]

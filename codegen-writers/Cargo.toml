@@ -1,0 +1,10 @@
+[package]
+name = "codegen-writers"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+codegen-core = { path = "../codegen-core" }
+thiserror = "2"
+
+[dev-dependencies]

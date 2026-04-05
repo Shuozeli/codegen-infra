@@ -1,0 +1,10 @@
+[package]
+name = "codegen-protobuf"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+codegen-core = { path = "../codegen-core" }
+prost = "0.13"
+prost-types = "0.13"
+thiserror = "2"
