@@ -1,7 +1,8 @@
 //! TypeScript code writer.
 
 use super::{to_pascal_case, CodeWriter, CodeWriterError};
-use codegen_core::ir::{EnumDef, MessageDef, ServiceDef, Type};
+use codegen_core::{escape_reserved_word, Language};
+use codegen_schema::{EnumDef, MessageDef, ScalarType, ServiceDef, StreamingType, Type};
 
 /// Code writer for TypeScript.
 #[derive(Default)]
@@ -15,25 +16,39 @@ impl TypeScriptCodeWriter {
     fn write_field_type(ty: &Type) -> String {
         match ty {
             Type::Scalar(scalar) => match scalar {
-                codegen_core::ir::ScalarType::Bool => "boolean".to_string(),
-                codegen_core::ir::ScalarType::Int8
-                | codegen_core::ir::ScalarType::Int16
-                | codegen_core::ir::ScalarType::Int32
-                | codegen_core::ir::ScalarType::Uint8
-                | codegen_core::ir::ScalarType::Uint16
-                | codegen_core::ir::ScalarType::Uint32
-                | codegen_core::ir::ScalarType::Float32
-                | codegen_core::ir::ScalarType::Float64 => "number".to_string(),
-                codegen_core::ir::ScalarType::Int64 => "bigint".to_string(),
-                codegen_core::ir::ScalarType::Uint64 => "bigint".to_string(),
-                codegen_core::ir::ScalarType::String => "string".to_string(),
-                codegen_core::ir::ScalarType::Bytes => "Uint8Array".to_string(),
-                _ => "unknown".to_string(),
+                ScalarType::Bool => "boolean".to_string(),
+                ScalarType::Int8
+                | ScalarType::Int16
+                | ScalarType::Int32
+                | ScalarType::Uint8
+                | ScalarType::Uint16
+                | ScalarType::Uint32
+                | ScalarType::Float32
+                | ScalarType::Float64 => "number".to_string(),
+                ScalarType::Int64 => "bigint".to_string(),
+                ScalarType::Uint64 => "bigint".to_string(),
+                ScalarType::String => "string".to_string(),
+                ScalarType::Bytes => "Uint8Array".to_string(),
             },
-            Type::Message { name, .. } => to_pascal_case(name),
-            Type::Enum { name, .. } => to_pascal_case(name),
+            Type::Message { name, .. } => {
+                escape_reserved_word(&to_pascal_case(name), Language::TypeScript)
+            }
+            Type::Enum { name, .. } => {
+                escape_reserved_word(&to_pascal_case(name), Language::TypeScript)
+            }
             Type::Vector(inner) => format!("{}[]", Self::write_field_type(inner)),
-            Type::InlineStruct(inner) => Self::write_field_type(inner),
+            Type::Optional(inner) => format!("{} | null", Self::write_field_type(inner)),
+            Type::Map { key, value } => {
+                format!(
+                    "Record<{}, {}>",
+                    Self::write_field_type(key),
+                    Self::write_field_type(value)
+                )
+            }
+            Type::OneOf { name, .. } => {
+                escape_reserved_word(&to_pascal_case(name), Language::TypeScript)
+            }
+            Type::ForeignKey(_) => "number".to_string(), // Foreign keys are typically integer IDs
         }
     }
 
@@ -50,10 +65,8 @@ impl TypeScriptCodeWriter {
             output.push_str(&format!("/** {} */\n", comment));
         }
 
-        output.push_str(&format!(
-            "export interface {} {{\n",
-            to_pascal_case(&msg.name)
-        ));
+        let interface_name = escape_reserved_word(&to_pascal_case(&msg.name), Language::TypeScript);
+        output.push_str(&format!("export interface {} {{\n", interface_name));
 
         // Write fields
         for field in &msg.fields {
@@ -62,7 +75,8 @@ impl TypeScriptCodeWriter {
             }
             let ty_str = Self::write_field_type(&field.ty);
             let optional = if field.is_optional { "?" } else { "" };
-            output.push_str(&format!("  {}{}: {};\n", field.name, optional, ty_str));
+            let field_name = escape_reserved_word(&field.name, Language::TypeScript);
+            output.push_str(&format!("  {}{}: {};\n", field_name, optional, ty_str));
         }
 
         output.push_str("}\n");
@@ -82,17 +96,15 @@ impl TypeScriptCodeWriter {
             output.push_str(&format!("/** {} */\n", comment));
         }
 
-        output.push_str(&format!("export enum {} {{\n", to_pascal_case(&enm.name)));
+        let enum_name = escape_reserved_word(&to_pascal_case(&enm.name), Language::TypeScript);
+        output.push_str(&format!("export enum {} {{\n", enum_name));
 
         // Write values
         for (i, value) in enm.values.iter().enumerate() {
             let suffix = if i < enm.values.len() - 1 { "," } else { "" };
-            output.push_str(&format!(
-                "  {} = {}{}\n",
-                to_pascal_case(&value.name),
-                value.value,
-                suffix
-            ));
+            let variant_name =
+                escape_reserved_word(&to_pascal_case(&value.name), Language::TypeScript);
+            output.push_str(&format!("  {} = {}{}\n", variant_name, value.value, suffix));
         }
 
         output.push_str("}\n");
@@ -103,8 +115,10 @@ impl TypeScriptCodeWriter {
         let mut output = String::new();
 
         // Write package as comment if present
-        if !svc.package.is_empty() {
-            output.push_str(&format!("// Package: {}\n", svc.package));
+        if let Some(ref pkg) = svc.package {
+            if !pkg.is_empty() {
+                output.push_str(&format!("// Package: {}\n", pkg));
+            }
         }
 
         // Write doc comments
@@ -112,7 +126,8 @@ impl TypeScriptCodeWriter {
             output.push_str(&format!("/** {} */\n", comment));
         }
 
-        output.push_str(&format!("export class {} {{\n", to_pascal_case(&svc.name)));
+        let class_name = escape_reserved_word(&to_pascal_case(&svc.name), Language::TypeScript);
+        output.push_str(&format!("export class {} {{\n", class_name));
         output.push_str("  private client: any;\n\n");
         output.push_str("  constructor(client: any) {\n");
         output.push_str("    this.client = client;\n");
@@ -120,12 +135,15 @@ impl TypeScriptCodeWriter {
 
         // Write methods
         for method in &svc.methods {
-            let request_type = to_pascal_case(&method.input_type);
-            let response_type = to_pascal_case(&method.output_type);
-            let method_name = to_pascal_case(&method.name);
+            let request_type =
+                escape_reserved_word(&to_pascal_case(&method.input_type), Language::TypeScript);
+            let response_type =
+                escape_reserved_word(&to_pascal_case(&method.output_type), Language::TypeScript);
+            let method_name =
+                escape_reserved_word(&to_pascal_case(&method.name), Language::TypeScript);
 
-            match (method.client_streaming, method.server_streaming) {
-                (false, false) => {
+            match method.streaming {
+                StreamingType::None => {
                     // Unary: async method(request: Type): Promise<Response>
                     output.push_str(&format!(
                         "  async {}(request: {}): Promise<{}> {{\n",
@@ -134,7 +152,7 @@ impl TypeScriptCodeWriter {
                     output.push_str("    return this.client.invoke(this.path, request);\n");
                     output.push_str("  }\n");
                 }
-                (false, true) => {
+                StreamingType::Server => {
                     // Server streaming: async *method(request: Type): AsyncGenerator<Response>
                     output.push_str(&format!(
                         "  async *{}(request: {}): AsyncGenerator<{}> {{\n",
@@ -144,7 +162,7 @@ impl TypeScriptCodeWriter {
                         .push_str("    yield* this.client.serverStreaming(this.path, request);\n");
                     output.push_str("  }\n");
                 }
-                (true, false) => {
+                StreamingType::Client => {
                     // Client streaming: async method(request: AsyncGenerator<Type>): Promise<Response>
                     output.push_str(&format!(
                         "  async {}(request: AsyncGenerator<{}>): Promise<{}> {{\n",
@@ -154,7 +172,7 @@ impl TypeScriptCodeWriter {
                         .push_str("    return this.client.clientStreaming(this.path, request);\n");
                     output.push_str("  }\n");
                 }
-                (true, true) => {
+                StreamingType::BiDi => {
                     // Bidirectional streaming: async *method(request: AsyncGenerator<Type>): AsyncGenerator<Response>
                     output.push_str(&format!(
                         "  async *{}(request: AsyncGenerator<{}>): AsyncGenerator<{}> {{\n",
@@ -219,7 +237,7 @@ impl CodeWriter for TypeScriptCodeWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codegen_core::ir::{FieldDef, ScalarType, Type};
+    use codegen_schema::{EnumValue, FieldDef, ScalarType, Type};
 
     #[test]
     fn test_write_simple_interface() {
@@ -250,19 +268,18 @@ mod tests {
         let enm = EnumDef {
             name: "color".to_string(),
             values: vec![
-                codegen_core::ir::EnumValue {
+                EnumValue {
                     name: "red".to_string(),
                     value: 0,
                     comments: vec![],
                 },
-                codegen_core::ir::EnumValue {
+                EnumValue {
                     name: "green".to_string(),
                     value: 1,
                     comments: vec![],
                 },
             ],
             is_union: false,
-            is_struct: false,
             namespace: None,
             comments: vec![],
         };
@@ -289,5 +306,78 @@ mod tests {
             )))),
             "string[]"
         );
+    }
+
+    #[test]
+    fn test_reserved_word_field_escaped() {
+        // Field named "type" should be escaped to "type_"
+        let writer = TypeScriptCodeWriter::new();
+        let msg = MessageDef {
+            name: "Data".to_string(),
+            fields: vec![FieldDef {
+                name: "type".to_string(),
+                ty: Type::Scalar(ScalarType::String),
+                is_optional: false,
+                default_value: None,
+                id: Some(1),
+                comments: vec![],
+            }],
+            is_struct: false,
+            namespace: None,
+            comments: vec![],
+        };
+
+        let output = writer.write_interface(&msg);
+        assert!(output.contains("type_: string"));
+        assert!(!output.contains("type: string"));
+    }
+
+    #[test]
+    fn test_reserved_word_type_escaped() {
+        // Type named "Type" should be escaped to "Type_"
+        let writer = TypeScriptCodeWriter::new();
+        let msg = MessageDef {
+            name: "Type".to_string(),
+            fields: vec![FieldDef {
+                name: "value".to_string(),
+                ty: Type::Scalar(ScalarType::Int32),
+                is_optional: false,
+                default_value: None,
+                id: Some(1),
+                comments: vec![],
+            }],
+            is_struct: false,
+            namespace: None,
+            comments: vec![],
+        };
+
+        let output = writer.write_interface(&msg);
+        // "Type" -> case-insensitive escape -> "Type_"
+        assert!(output.contains("export interface Type_"));
+        // The unescaped "export interface Type" should NOT appear
+        assert!(!output.contains("export interface Type {"));
+    }
+
+    #[test]
+    fn test_reserved_word_enum_escaped() {
+        // Enum named "Enum" should be escaped to "Enum_"
+        let mut writer = TypeScriptCodeWriter::new();
+        let enm = EnumDef {
+            name: "Enum".to_string(),
+            values: vec![EnumValue {
+                name: "A".to_string(),
+                value: 0,
+                comments: vec![],
+            }],
+            is_union: false,
+            namespace: None,
+            comments: vec![],
+        };
+
+        let output = writer.write_enum(&enm).unwrap();
+        // "Enum" -> case-insensitive escape -> "Enum_"
+        assert!(output.contains("export enum Enum_"));
+        // The unescaped "export enum Enum" should NOT appear
+        assert!(!output.contains("export enum Enum {"));
     }
 }

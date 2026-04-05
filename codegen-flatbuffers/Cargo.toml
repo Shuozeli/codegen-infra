@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 codegen-core = { path = "../codegen-core" }
+codegen-schema = { path = "../codegen-schema" }
 flatc-rs-schema = { git = "https://github.com/Shuozeli/flatbuffers-rs.git", package = "flatc-rs-schema" }
 thiserror = "2"
 

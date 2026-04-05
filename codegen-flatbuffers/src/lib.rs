@@ -1,48 +1,37 @@
-//! FlatBuffers schema adapter for codegen-core IR.
+//! FlatBuffers schema adapter for codegen-schema.
 //!
 //! Converts from [`flatc_rs_schema::ResolvedSchema`] to the common
-//! intermediate representation types.
+//! schema definition types.
 
-use codegen_core::ir::{
-    EnumDef, EnumValue, FieldDef, MessageDef, MethodDef, SchemaProvider, ServiceDef, Type,
+use codegen_core::CodeGenError;
+use codegen_schema::{
+    EnumDef, EnumValue, FieldDef, MessageDef, MethodDef, OneOfVariant, ScalarType, SchemaDef,
+    ServiceDef, Type,
 };
 
 use flatc_rs_schema::resolved::{ResolvedSchema, ResolvedType};
 use flatc_rs_schema::BaseType;
 
 // ---------------------------------------------------------------------------
-// Error type
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, thiserror::Error)]
-pub enum FlatbuffersAdapterError {
-    #[error("unsupported base type: {0:?}")]
-    UnsupportedBaseType(BaseType),
-
-    #[error("object index out of bounds: {0}")]
-    ObjectIndexOutOfBounds(usize),
-}
-
-// ---------------------------------------------------------------------------
 // BaseType -> ScalarType
 // ---------------------------------------------------------------------------
 
-fn base_type_to_scalar(bt: BaseType) -> Option<codegen_core::ir::ScalarType> {
+fn base_type_to_scalar(bt: BaseType) -> Option<ScalarType> {
     match bt {
-        BaseType::BASE_TYPE_BOOL => Some(codegen_core::ir::ScalarType::Bool),
-        BaseType::BASE_TYPE_BYTE => Some(codegen_core::ir::ScalarType::Int8),
-        BaseType::BASE_TYPE_U_BYTE => Some(codegen_core::ir::ScalarType::Uint8),
-        BaseType::BASE_TYPE_SHORT => Some(codegen_core::ir::ScalarType::Int16),
-        BaseType::BASE_TYPE_U_SHORT => Some(codegen_core::ir::ScalarType::Uint16),
-        BaseType::BASE_TYPE_INT => Some(codegen_core::ir::ScalarType::Int32),
-        BaseType::BASE_TYPE_U_INT => Some(codegen_core::ir::ScalarType::Uint32),
-        BaseType::BASE_TYPE_LONG => Some(codegen_core::ir::ScalarType::Int64),
-        BaseType::BASE_TYPE_U_LONG => Some(codegen_core::ir::ScalarType::Uint64),
-        BaseType::BASE_TYPE_FLOAT => Some(codegen_core::ir::ScalarType::Float32),
-        BaseType::BASE_TYPE_DOUBLE => Some(codegen_core::ir::ScalarType::Float64),
+        BaseType::BASE_TYPE_BOOL => Some(ScalarType::Bool),
+        BaseType::BASE_TYPE_BYTE => Some(ScalarType::Int8),
+        BaseType::BASE_TYPE_U_BYTE => Some(ScalarType::Uint8),
+        BaseType::BASE_TYPE_SHORT => Some(ScalarType::Int16),
+        BaseType::BASE_TYPE_U_SHORT => Some(ScalarType::Uint16),
+        BaseType::BASE_TYPE_INT => Some(ScalarType::Int32),
+        BaseType::BASE_TYPE_U_INT => Some(ScalarType::Uint32),
+        BaseType::BASE_TYPE_LONG => Some(ScalarType::Int64),
+        BaseType::BASE_TYPE_U_LONG => Some(ScalarType::Uint64),
+        BaseType::BASE_TYPE_FLOAT => Some(ScalarType::Float32),
+        BaseType::BASE_TYPE_DOUBLE => Some(ScalarType::Float64),
         // BASE_TYPE_STRING is NOT a scalar in FlatBuffers (it's an offset type)
         // but we handle it here for convenience
-        BaseType::BASE_TYPE_STRING => Some(codegen_core::ir::ScalarType::String),
+        BaseType::BASE_TYPE_STRING => Some(ScalarType::String),
         // These are handled elsewhere
         BaseType::BASE_TYPE_VECTOR | BaseType::BASE_TYPE_VECTOR64 | BaseType::BASE_TYPE_ARRAY => {
             None
@@ -54,13 +43,10 @@ fn base_type_to_scalar(bt: BaseType) -> Option<codegen_core::ir::ScalarType> {
 }
 
 // ---------------------------------------------------------------------------
-// ResolvedType -> IR Type (with schema access for type resolution)
+// ResolvedType -> Schema Type
 // ---------------------------------------------------------------------------
 
-fn convert_type(
-    rt: &ResolvedType,
-    schema: &ResolvedSchema,
-) -> Result<Type, FlatbuffersAdapterError> {
+fn convert_type(rt: &ResolvedType, schema: &ResolvedSchema) -> Result<Type, CodeGenError> {
     use flatc_rs_schema::BaseType as B;
 
     // Handle scalar types
@@ -72,7 +58,7 @@ fn convert_type(
 
     // Handle string (not a scalar in FlatBuffers but we treat it as one)
     if rt.base_type == B::BASE_TYPE_STRING {
-        return Ok(Type::Scalar(codegen_core::ir::ScalarType::String));
+        return Ok(Type::Scalar(ScalarType::String));
     }
 
     // Handle vectors
@@ -109,13 +95,71 @@ fn convert_type(
         return Ok(Type::Vector(Box::new(element)));
     }
 
+    // Handle union types
+    if rt.base_type == B::BASE_TYPE_UNION {
+        if let Some(idx) = rt.index {
+            let idx_usize = usize::try_from(idx).map_err(|_| {
+                CodeGenError::Internal(format!("enum index out of bounds: {}", idx as usize))
+            })?;
+
+            if idx_usize >= schema.enums.len() {
+                return Err(CodeGenError::Internal(format!(
+                    "enum index out of bounds: {}",
+                    idx_usize
+                )));
+            }
+
+            let union_enum = &schema.enums[idx_usize];
+            let variants: Vec<OneOfVariant> = union_enum
+                .values
+                .iter()
+                .filter_map(|v| {
+                    let ty = if let Some(ref type_resolved) = v.union_type {
+                        let type_idx = type_resolved.index?;
+                        let type_idx_usize = usize::try_from(type_idx).ok()?;
+                        if type_idx_usize >= schema.objects.len() {
+                            return None;
+                        }
+                        let obj = &schema.objects[type_idx_usize];
+                        let namespace = obj.namespace.as_ref().and_then(|n| n.namespace.clone());
+                        Type::Message {
+                            name: obj.name.clone(),
+                            package: namespace,
+                        }
+                    } else {
+                        return None;
+                    };
+                    Some(OneOfVariant {
+                        name: v.name.clone(),
+                        ty,
+                    })
+                })
+                .collect();
+
+            if variants.is_empty() {
+                return Err(CodeGenError::Internal(
+                    "union has no variants with types".to_string(),
+                ));
+            }
+
+            return Ok(Type::OneOf {
+                name: union_enum.name.clone(),
+                variants,
+            });
+        }
+    }
+
     // Handle tables/structs by index - resolve actual type name
     if let Some(idx) = rt.index {
-        let idx_usize = usize::try_from(idx)
-            .map_err(|_| FlatbuffersAdapterError::ObjectIndexOutOfBounds(idx as usize))?;
+        let idx_usize = usize::try_from(idx).map_err(|_| {
+            CodeGenError::Internal(format!("object index out of bounds: {}", idx as usize))
+        })?;
 
         if idx_usize >= schema.objects.len() {
-            return Err(FlatbuffersAdapterError::ObjectIndexOutOfBounds(idx_usize));
+            return Err(CodeGenError::Internal(format!(
+                "object index out of bounds: {}",
+                idx_usize
+            )));
         }
 
         let obj = &schema.objects[idx_usize];
@@ -127,177 +171,171 @@ fn convert_type(
         });
     }
 
-    Err(FlatbuffersAdapterError::UnsupportedBaseType(rt.base_type))
+    Err(CodeGenError::Internal(format!(
+        "unsupported base type: {:?}",
+        rt.base_type
+    )))
 }
 
 // ---------------------------------------------------------------------------
-// Newtype wrapper to work around orphan rule
+// ResolvedSchema -> SchemaDef
 // ---------------------------------------------------------------------------
 
-/// Wrapper to implement SchemaProvider for ResolvedSchema.
-pub struct FlatbuffersSchema<'a>(pub &'a ResolvedSchema);
+/// Convert a ResolvedSchema to a SchemaDef.
+pub fn from_resolved_schema(schema: &ResolvedSchema) -> Result<SchemaDef, CodeGenError> {
+    let messages: Vec<MessageDef> = schema
+        .objects
+        .iter()
+        .map(|o| {
+            let namespace = o.namespace.as_ref().and_then(|n| n.namespace.clone());
+            let comments = o
+                .documentation
+                .as_ref()
+                .map(|d| d.lines.clone())
+                .unwrap_or_default();
 
-impl<'a> SchemaProvider for FlatbuffersSchema<'a> {
-    fn messages(&self) -> Vec<MessageDef> {
-        let schema = self.0;
-        // Only return non-struct objects (tables), not structs
-        schema
-            .objects
-            .iter()
-            .filter(|o| !o.is_struct)
-            .map(|o| {
-                let namespace = o.namespace.as_ref().and_then(|n| n.namespace.clone());
-                let comments = o
-                    .documentation
-                    .as_ref()
-                    .map(|d| d.lines.clone())
-                    .unwrap_or_default();
-
-                MessageDef {
-                    name: o.name.clone(),
-                    fields: o
-                        .fields
-                        .iter()
-                        .map(|f| {
-                            // Log conversion errors but use Int32 as fallback to avoid
-                            // crashing on malformed schemas. In production, you might
-                            // want to collect these errors instead.
-                            let ty = convert_type(&f.type_, schema).unwrap_or_else(|e| {
-                                eprintln!(
-                                    "warning: failed to convert type for field '{}': {}",
-                                    f.name, e
-                                );
-                                Type::Scalar(codegen_core::ir::ScalarType::Int32)
-                            });
-                            let default_value = f
-                                .default_string
-                                .clone()
-                                .or_else(|| f.default_integer.map(|i| i.to_string()));
-                            let comments = f
-                                .documentation
-                                .as_ref()
-                                .map(|d| d.lines.clone())
-                                .unwrap_or_default();
-
-                            FieldDef {
-                                name: f.name.clone(),
-                                ty,
-                                is_optional: f.is_optional,
-                                default_value,
-                                id: f.id,
-                                comments,
-                            }
-                        })
-                        .collect(),
-                    is_struct: false,
-                    namespace,
-                    comments,
-                }
-            })
-            .collect()
-    }
-
-    fn services(&self) -> Vec<ServiceDef> {
-        let schema = self.0;
-        schema
-            .services
-            .iter()
-            .map(|s| {
-                let comments = s
-                    .documentation
-                    .as_ref()
-                    .map(|d| d.lines.clone())
-                    .unwrap_or_default();
-                let namespace = s.namespace.as_ref().and_then(|n| n.namespace.clone());
-
-                ServiceDef {
-                    name: s.name.clone(),
-                    package: namespace.clone().unwrap_or_default(),
-                    proto_name: s.name.clone(),
-                    methods: s
-                        .calls
-                        .iter()
-                        .map(|c| {
-                            let request_idx = c.request_index;
-                            let response_idx = c.response_index;
-
-                            let (input_type, output_type) = if request_idx < schema.objects.len()
-                                && response_idx < schema.objects.len()
-                            {
-                                let req = &schema.objects[request_idx];
-                                let res = &schema.objects[response_idx];
-                                (req.name.clone(), res.name.clone())
-                            } else {
-                                ("UnknownRequest".to_string(), "UnknownResponse".to_string())
-                            };
-
-                            MethodDef {
-                                name: c.name.clone(),
-                                proto_name: c.name.clone(),
-                                input_type,
-                                output_type,
-                                client_streaming: false,
-                                server_streaming: false,
-                                codec_path: "crate::codec::Codec".to_string(),
-                                comments: c
-                                    .documentation
-                                    .as_ref()
-                                    .map(|d| d.lines.clone())
-                                    .unwrap_or_default(),
-                            }
-                        })
-                        .collect(),
-                    comments,
-                }
-            })
-            .collect()
-    }
-
-    fn enums(&self) -> Vec<EnumDef> {
-        let schema = self.0;
-        schema
-            .enums
-            .iter()
-            .map(|e| {
-                let namespace = e.namespace.as_ref().and_then(|n| n.namespace.clone());
-
-                EnumDef {
-                    name: e.name.clone(),
-                    values: e
-                        .values
-                        .iter()
-                        .map(|v| EnumValue {
-                            name: v.name.clone(),
-                            value: v.value,
-                            comments: v
-                                .documentation
-                                .as_ref()
-                                .map(|d| d.lines.clone())
-                                .unwrap_or_default(),
-                        })
-                        .collect(),
-                    is_union: e.is_union,
-                    is_struct: false,
-                    namespace,
-                    comments: e
+            let fields: Vec<FieldDef> = o
+                .fields
+                .iter()
+                .map(|f| {
+                    let ty = convert_type(&f.type_, schema)?;
+                    let default_value = f
+                        .default_string
+                        .clone()
+                        .or_else(|| f.default_integer.map(|i| i.to_string()));
+                    let comments = f
                         .documentation
                         .as_ref()
                         .map(|d| d.lines.clone())
-                        .unwrap_or_default(),
-                }
+                        .unwrap_or_default();
+
+                    Ok(FieldDef {
+                        name: f.name.clone(),
+                        ty,
+                        is_optional: f.is_optional,
+                        default_value,
+                        id: f.id,
+                        comments,
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+
+            Ok(MessageDef {
+                name: o.name.clone(),
+                fields,
+                is_struct: o.is_struct,
+                namespace,
+                comments,
             })
-            .collect()
-    }
+        })
+        .collect::<Result<Vec<_>, _>>()?;
 
-    fn file_ident(&self) -> Option<&str> {
-        self.0.file_ident.as_deref()
-    }
+    let enums: Vec<EnumDef> = schema
+        .enums
+        .iter()
+        .map(|e| {
+            let namespace = e.namespace.as_ref().and_then(|n| n.namespace.clone());
 
-    fn root_table(&self) -> Option<&str> {
-        self.0
+            EnumDef {
+                name: e.name.clone(),
+                values: e
+                    .values
+                    .iter()
+                    .map(|v| EnumValue {
+                        name: v.name.clone(),
+                        value: v.value,
+                        comments: v
+                            .documentation
+                            .as_ref()
+                            .map(|d| d.lines.clone())
+                            .unwrap_or_default(),
+                    })
+                    .collect(),
+                is_union: e.is_union,
+                namespace,
+                comments: e
+                    .documentation
+                    .as_ref()
+                    .map(|d| d.lines.clone())
+                    .unwrap_or_default(),
+            }
+        })
+        .collect();
+
+    let services: Vec<ServiceDef> = schema
+        .services
+        .iter()
+        .map(|s| {
+            let comments = s
+                .documentation
+                .as_ref()
+                .map(|d| d.lines.clone())
+                .unwrap_or_default();
+            let namespace = s.namespace.as_ref().and_then(|n| n.namespace.clone());
+            let methods = s
+                .calls
+                .iter()
+                .map(|c| {
+                    let request_idx = c.request_index;
+                    let response_idx = c.response_index;
+
+                    if request_idx >= schema.objects.len() {
+                        return Err(CodeGenError::Internal(format!(
+                            "request index {} out of bounds for service '{}', method '{}'",
+                            request_idx, s.name, c.name,
+                        )));
+                    }
+                    if response_idx >= schema.objects.len() {
+                        return Err(CodeGenError::Internal(format!(
+                            "response index {} out of bounds for service '{}', method '{}'",
+                            response_idx, s.name, c.name,
+                        )));
+                    }
+
+                    let req = &schema.objects[request_idx];
+                    let res = &schema.objects[response_idx];
+
+                    // NOTE: FlatBuffers IDL does not support streaming RPC.
+                    // All RPC calls are unary (request/response), so we always
+                    // set streaming to (false, false). There is no attribute in
+                    // the FlatBuffers schema to indicate streaming capability.
+                    Ok(MethodDef {
+                        name: c.name.clone(),
+                        input_type: req.name.clone(),
+                        output_type: res.name.clone(),
+                        streaming: (false, false).into(),
+                        // FlatBuffers does not have a concept of codec path in its
+                        // schema. We use a default that can be overridden by the
+                        // code generator or user configuration.
+                        codec_path: "crate::codec::Codec".to_string(),
+                        comments: c
+                            .documentation
+                            .as_ref()
+                            .map(|d| d.lines.clone())
+                            .unwrap_or_default(),
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+
+            Ok(ServiceDef {
+                name: s.name.clone(),
+                methods,
+                package: namespace,
+                comments,
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(SchemaDef {
+        name: schema.file_ident.clone().unwrap_or_default(),
+        messages,
+        enums,
+        services,
+        file_ident: schema.file_ident.clone(),
+        root_table: schema
             .root_table_index
-            .and_then(|idx| self.0.objects.get(idx).map(|o| o.name.as_str()))
-    }
+            .and_then(|idx| schema.objects.get(idx).map(|o| o.name.clone())),
+    })
 }
 
 #[cfg(test)]
@@ -471,22 +509,30 @@ mod tests {
     }
 
     #[test]
-    fn test_messages_excludes_structs() {
+    fn test_messages_include_structs_and_tables() {
         let schema = make_test_schema();
-        let provider = FlatbuffersSchema(&schema);
-
-        let messages = provider.messages();
-        assert_eq!(messages.len(), 1);
-        assert_eq!(messages[0].name, "Monster");
+        let result = from_resolved_schema(&schema).unwrap();
+        // Both tables (is_struct=false) and structs (is_struct=true) should be included
+        assert_eq!(result.messages.len(), 2);
+        let names: Vec<_> = result.messages.iter().map(|m| &m.name).collect();
+        assert!(names.contains(&&"Monster".to_string()));
+        assert!(names.contains(&&"Weapon".to_string()));
+        // Verify is_struct flag is correctly preserved
+        let monster = result
+            .messages
+            .iter()
+            .find(|m| m.name == "Monster")
+            .unwrap();
+        let weapon = result.messages.iter().find(|m| m.name == "Weapon").unwrap();
+        assert!(!monster.is_struct); // Monster is a table
+        assert!(weapon.is_struct); // Weapon is a struct
     }
 
     #[test]
     fn test_messages_contain_correct_fields() {
         let schema = make_test_schema();
-        let provider = FlatbuffersSchema(&schema);
-
-        let messages = provider.messages();
-        let monster = &messages[0];
+        let result = from_resolved_schema(&schema).unwrap();
+        let monster = &result.messages[0];
 
         assert_eq!(monster.name, "Monster");
         assert_eq!(monster.fields.len(), 2);
@@ -498,30 +544,29 @@ mod tests {
     #[test]
     fn test_enums() {
         let schema = make_test_schema();
-        let provider = FlatbuffersSchema(&schema);
+        let result = from_resolved_schema(&schema).unwrap();
 
-        let enums = provider.enums();
-        assert_eq!(enums.len(), 1);
-        assert_eq!(enums[0].name, "Color");
-        assert_eq!(enums[0].values.len(), 2);
-        assert_eq!(enums[0].values[0].name, "Red");
-        assert_eq!(enums[0].values[1].name, "Green");
+        assert_eq!(result.enums.len(), 1);
+        assert_eq!(result.enums[0].name, "Color");
+        assert_eq!(result.enums[0].values.len(), 2);
+        assert_eq!(result.enums[0].values[0].name, "Red");
+        assert_eq!(result.enums[0].values[1].name, "Green");
     }
 
     #[test]
     fn test_file_ident() {
         let schema = make_test_schema();
-        let provider = FlatbuffersSchema(&schema);
+        let result = from_resolved_schema(&schema).unwrap();
 
-        assert_eq!(provider.file_ident(), Some("MyGame"));
+        assert_eq!(result.file_ident, Some("MyGame".to_string()));
     }
 
     #[test]
     fn test_root_table() {
         let schema = make_test_schema();
-        let provider = FlatbuffersSchema(&schema);
+        let result = from_resolved_schema(&schema).unwrap();
 
-        assert_eq!(provider.root_table(), Some("Monster"));
+        assert_eq!(result.root_table, Some("Monster".to_string()));
     }
 
     #[test]
@@ -538,10 +583,7 @@ mod tests {
 
         let result = convert_type(&rt, &schema);
         assert!(result.is_ok());
-        assert!(matches!(
-            result.unwrap(),
-            Type::Scalar(codegen_core::ir::ScalarType::Int32)
-        ));
+        assert!(matches!(result.unwrap(), Type::Scalar(ScalarType::Int32)));
     }
 
     #[test]
@@ -558,10 +600,7 @@ mod tests {
 
         let result = convert_type(&rt, &schema);
         assert!(result.is_ok());
-        assert!(matches!(
-            result.unwrap(),
-            Type::Scalar(codegen_core::ir::ScalarType::String)
-        ));
+        assert!(matches!(result.unwrap(), Type::Scalar(ScalarType::String)));
     }
 
     #[test]
@@ -605,10 +644,7 @@ mod tests {
         assert!(result.is_ok());
         match result.unwrap() {
             Type::Vector(inner) => {
-                assert!(matches!(
-                    *inner,
-                    Type::Scalar(codegen_core::ir::ScalarType::String)
-                ));
+                assert!(matches!(*inner, Type::Scalar(ScalarType::String)));
             }
             _ => panic!("Expected Vector type"),
         }

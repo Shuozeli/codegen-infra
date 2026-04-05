@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 codegen-core = { path = "../codegen-core" }
+codegen-schema = { path = "../codegen-schema" }
 thiserror = "2"
 
 [dev-dependencies]

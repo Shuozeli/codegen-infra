@@ -1,15 +1,16 @@
 //! Integration tests for codegen-writers.
 //!
 //! These tests verify the full workflow:
-//! 1. SchemaProvider converts schema -> IR (Intermediate Representation)
-//! 2. CodeWriter consumes IR -> generated code
+//! 1. Adapter converts schema -> SchemaDef
+//! 2. CodeWriter consumes SchemaDef -> generated code
 //!
-//! Note: These tests build IR structures directly rather than parsing from
+//! Note: These tests build schema structures directly rather than parsing from
 //! schema files, since the raw schema types (flatc_rs_schema, prost_types) are
 //! not re-exported by the adapter crates.
 
-use codegen_core::ir::{
-    EnumDef, EnumValue, FieldDef, MessageDef, MethodDef, ScalarType, ServiceDef, Type,
+use codegen_schema::{
+    EnumDef, EnumValue, FieldDef, MessageDef, MethodDef, ScalarType, ServiceDef, StreamingType,
+    Type,
 };
 use codegen_writers::{CodeWriter, DartCodeWriter, RustCodeWriter, TypeScriptCodeWriter};
 
@@ -86,7 +87,6 @@ fn make_color_enum() -> EnumDef {
             },
         ],
         is_union: false,
-        is_struct: false,
         namespace: Some("MyGame".to_string()),
         comments: vec![],
     }
@@ -96,26 +96,21 @@ fn make_color_enum() -> EnumDef {
 fn make_monster_service() -> ServiceDef {
     ServiceDef {
         name: "MonsterService".to_string(),
-        package: "MyGame".to_string(),
-        proto_name: "MonsterService".to_string(),
+        package: Some("MyGame".to_string()),
         methods: vec![
             MethodDef {
                 name: "create_monster".to_string(),
-                proto_name: "CreateMonster".to_string(),
                 input_type: "CreateMonsterRequest".to_string(),
                 output_type: "Monster".to_string(),
-                client_streaming: false,
-                server_streaming: false,
+                streaming: StreamingType::None,
                 codec_path: "crate::codec::Codec".to_string(),
                 comments: vec![],
             },
             MethodDef {
                 name: "get_monster".to_string(),
-                proto_name: "GetMonster".to_string(),
                 input_type: "GetMonsterRequest".to_string(),
                 output_type: "Monster".to_string(),
-                client_streaming: false,
-                server_streaming: false,
+                streaming: StreamingType::None,
                 codec_path: "crate::codec::Codec".to_string(),
                 comments: vec![],
             },
@@ -183,7 +178,6 @@ fn make_phone_type_enum() -> EnumDef {
             },
         ],
         is_union: false,
-        is_struct: false,
         namespace: Some("mygame".to_string()),
         comments: vec![],
     }
@@ -193,15 +187,12 @@ fn make_phone_type_enum() -> EnumDef {
 fn make_test_service() -> ServiceDef {
     ServiceDef {
         name: "TestService".to_string(),
-        package: "mygame".to_string(),
-        proto_name: "TestService".to_string(),
+        package: Some("mygame".to_string()),
         methods: vec![MethodDef {
             name: "get_person".to_string(),
-            proto_name: "GetPerson".to_string(),
             input_type: "Person".to_string(),
             output_type: "Person".to_string(),
-            client_streaming: false,
-            server_streaming: false,
+            streaming: StreamingType::None,
             codec_path: "crate::codec::Codec".to_string(),
             comments: vec![],
         }],
@@ -401,18 +392,23 @@ fn test_dart_service_generation() {
         output.contains("class MonsterService"),
         "Should contain MonsterService class"
     );
-    // Dart uses method.name directly (no case conversion)
+    // Dart converts method names to camelCase
     assert!(
-        output.contains("Future<Monster> create_monster"),
-        "Should contain create_monster method"
+        output.contains("Future<Monster> createMonster"),
+        "Should contain createMonster method"
     );
     assert!(
-        output.contains("Future<Monster> get_monster"),
-        "Should contain get_monster method"
+        output.contains("Future<Monster> getMonster"),
+        "Should contain getMonster method"
     );
     assert!(
-        output.contains("final pbGrpc.GrpcClient client"),
+        output.contains("final MyGameClient client"),
         "Should have grpc client field"
+    );
+    // Verify package-specific import is added
+    assert!(
+        output.contains("import 'package:MyGame.pbrpc.dart';"),
+        "Should have package-specific pbrpc import"
     );
 }
 
@@ -842,15 +838,12 @@ fn test_type_mapping_message_reference() {
 fn test_rust_streaming_methods() {
     let unary_service = ServiceDef {
         name: "UnaryService".to_string(),
-        package: "test".to_string(),
-        proto_name: "UnaryService".to_string(),
+        package: Some("test".to_string()),
         methods: vec![MethodDef {
             name: "get".to_string(),
-            proto_name: "Get".to_string(),
             input_type: "Request".to_string(),
             output_type: "Response".to_string(),
-            client_streaming: false,
-            server_streaming: false,
+            streaming: StreamingType::None,
             codec_path: "crate::codec::Codec".to_string(),
             comments: vec![],
         }],
@@ -859,15 +852,12 @@ fn test_rust_streaming_methods() {
 
     let server_streaming_service = ServiceDef {
         name: "ServerStreamingService".to_string(),
-        package: "test".to_string(),
-        proto_name: "ServerStreamingService".to_string(),
+        package: Some("test".to_string()),
         methods: vec![MethodDef {
             name: "subscribe".to_string(),
-            proto_name: "Subscribe".to_string(),
             input_type: "Request".to_string(),
             output_type: "Response".to_string(),
-            client_streaming: false,
-            server_streaming: true,
+            streaming: StreamingType::Server,
             codec_path: "crate::codec::Codec".to_string(),
             comments: vec![],
         }],
@@ -894,46 +884,37 @@ fn test_rust_streaming_methods() {
 fn test_typescript_streaming_methods() {
     let streaming_service = ServiceDef {
         name: "StreamingService".to_string(),
-        package: "test".to_string(),
-        proto_name: "StreamingService".to_string(),
+        package: Some("test".to_string()),
         methods: vec![
             MethodDef {
                 name: "unary".to_string(),
-                proto_name: "Unary".to_string(),
                 input_type: "Request".to_string(),
                 output_type: "Response".to_string(),
-                client_streaming: false,
-                server_streaming: false,
+                streaming: StreamingType::None,
                 codec_path: "crate::codec::Codec".to_string(),
                 comments: vec![],
             },
             MethodDef {
                 name: "server_stream".to_string(),
-                proto_name: "ServerStream".to_string(),
                 input_type: "Request".to_string(),
                 output_type: "Response".to_string(),
-                client_streaming: false,
-                server_streaming: true,
+                streaming: StreamingType::Server,
                 codec_path: "crate::codec::Codec".to_string(),
                 comments: vec![],
             },
             MethodDef {
                 name: "client_stream".to_string(),
-                proto_name: "ClientStream".to_string(),
                 input_type: "Request".to_string(),
                 output_type: "Response".to_string(),
-                client_streaming: true,
-                server_streaming: false,
+                streaming: StreamingType::Client,
                 codec_path: "crate::codec::Codec".to_string(),
                 comments: vec![],
             },
             MethodDef {
                 name: "bidi_stream".to_string(),
-                proto_name: "BidiStream".to_string(),
                 input_type: "Request".to_string(),
                 output_type: "Response".to_string(),
-                client_streaming: true,
-                server_streaming: true,
+                streaming: StreamingType::BiDi,
                 codec_path: "crate::codec::Codec".to_string(),
                 comments: vec![],
             },

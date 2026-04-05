@@ -1,7 +1,7 @@
 //! Code writers for multiple languages.
 //!
 //! This module provides language-specific code writers that consume the common
-//! IR types and produce code in the target language.
+//! schema types and produce code in the target language.
 
 mod dart;
 mod rust;
@@ -11,7 +11,7 @@ pub use dart::DartCodeWriter;
 pub use rust::RustCodeWriter;
 pub use typescript::TypeScriptCodeWriter;
 
-use codegen_core::ir::{EnumDef, MessageDef, ServiceDef};
+use codegen_schema::{EnumDef, MessageDef, ServiceDef};
 use thiserror::Error;
 
 // ---------------------------------------------------------------------------
@@ -76,19 +76,40 @@ pub fn to_pascal_case(s: &str) -> String {
 }
 
 /// Convert a type name to snake_case.
+///
+/// Handles consecutive uppercase letters (acronyms) correctly:
+/// - "HTTPServer" -> "http_server"
+/// - "MyHTTPServer" -> "my_http_server"
+/// - "IOError" -> "io_error"
 pub fn to_snake_case(s: &str) -> String {
+    let chars: Vec<char> = s.chars().collect();
     let mut result = String::new();
-    let mut prev_upper = false;
-    for c in s.chars() {
+
+    for (i, &c) in chars.iter().enumerate() {
         if c.is_uppercase() {
-            if !result.is_empty() && !prev_upper {
+            // Check if this uppercase starts a new word: preceded by uppercase AND followed by lowercase
+            if i > 0
+                && chars[i - 1].is_uppercase()
+                && i + 1 < chars.len()
+                && chars[i + 1].is_lowercase()
+            {
+                // This uppercase is preceded by uppercase and followed by lowercase:
+                // it's the LAST uppercase of the acronym, starting the next word.
+                // Add underscore before it.
+                result.push('_');
+            }
+            if !result.is_empty()
+                && !result.ends_with('_')
+                && !chars
+                    .get(result.len().saturating_sub(1))
+                    .is_some_and(|&x| x.is_uppercase())
+            {
+                // Previous char was lowercase: add underscore
                 result.push('_');
             }
             result.push(c.to_ascii_lowercase());
-            prev_upper = true;
         } else {
             result.push(c);
-            prev_upper = false;
         }
     }
     result
@@ -127,6 +148,10 @@ mod tests {
         assert_eq!(to_snake_case("HelloWorld"), "hello_world");
         assert_eq!(to_snake_case("Simple"), "simple");
         assert_eq!(to_snake_case("GrpcService"), "grpc_service");
+        // Consecutive uppercase (acronyms) - per issue description
+        assert_eq!(to_snake_case("HTTPServer"), "http_server");
+        assert_eq!(to_snake_case("MyHTTPServer"), "my_http_server");
+        assert_eq!(to_snake_case("IOError"), "io_error");
     }
 
     #[test]

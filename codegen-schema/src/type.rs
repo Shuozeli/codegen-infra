@@ -2,9 +2,8 @@
 
 use std::fmt;
 
-/// Represents a scalar type.
+/// Scalar types supported across all schema formats.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum ScalarType {
     Bool,
     Int8,
@@ -35,13 +34,31 @@ impl fmt::Display for ScalarType {
             ScalarType::Uint64 => write!(f, "uint64"),
             ScalarType::Float32 => write!(f, "float32"),
             ScalarType::Float64 => write!(f, "float64"),
-            ScalarType::String => write!(f, "string"),
+            ScalarType::String => write!(f, "String"),
             ScalarType::Bytes => write!(f, "bytes"),
         }
     }
 }
 
-/// Represents a type in the schema.
+/// A single variant within a oneof group.
+#[derive(Debug, Clone)]
+pub struct OneOfVariant {
+    /// The field name of this variant (e.g., "i", "s" in `oneof result { int32 i = 1; string s = 2; }`).
+    pub name: String,
+    /// The type of this variant.
+    pub ty: Type,
+}
+
+/// A foreign key reference type.
+#[derive(Debug, Clone)]
+pub struct ForeignKey {
+    /// The table being referenced.
+    pub referenced_table: String,
+    /// The column being referenced.
+    pub referenced_column: String,
+}
+
+/// Type in the unified schema.
 #[derive(Debug, Clone)]
 pub enum Type {
     /// A scalar type.
@@ -58,8 +75,17 @@ pub enum Type {
     },
     /// A vector/array of elements.
     Vector(Box<Type>),
-    /// A nested struct/table (inline in FlatBuffers).
-    InlineStruct(Box<Type>),
+    /// An optional/nullable type.
+    Optional(Box<Type>),
+    /// A map type (key-value pairs).
+    Map { key: Box<Type>, value: Box<Type> },
+    /// A oneof group.
+    OneOf {
+        name: String,
+        variants: Vec<OneOfVariant>,
+    },
+    /// A foreign key reference.
+    ForeignKey(ForeignKey),
 }
 
 impl fmt::Display for Type {
@@ -69,7 +95,12 @@ impl fmt::Display for Type {
             Type::Message { name, .. } => write!(f, "{}", name),
             Type::Enum { name, .. } => write!(f, "{}", name),
             Type::Vector(inner) => write!(f, "Vec<{}>", inner),
-            Type::InlineStruct(inner) => write!(f, "{}", inner),
+            Type::Optional(inner) => write!(f, "Option<{}>", inner),
+            Type::Map { key, value } => write!(f, "Map<{}, {}>", key, value),
+            Type::OneOf { name, .. } => write!(f, "{}", name),
+            Type::ForeignKey(fk) => {
+                write!(f, "FK<{}.{}>", fk.referenced_table, fk.referenced_column)
+            }
         }
     }
 }
@@ -80,10 +111,14 @@ impl Type {
         matches!(self, Type::Scalar(_))
     }
 
-    /// Get the inner type for vector types.
+    /// Get the inner type for container types (Vector, Optional).
+    ///
+    /// Returns `Some(&inner)` for types that have a single inner type.
+    /// Returns `None` for `OneOf` (has multiple variants, not a single element).
     pub fn element_type(&self) -> Option<&Type> {
         match self {
             Type::Vector(inner) => Some(inner),
+            Type::Optional(inner) => Some(inner),
             _ => None,
         }
     }

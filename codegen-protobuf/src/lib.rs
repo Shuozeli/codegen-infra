@@ -3,8 +3,9 @@
 //! Converts from protobuf `FileDescriptorProto` to the common
 //! intermediate representation types.
 
-use codegen_core::ir::{
-    EnumDef, EnumValue, FieldDef, MessageDef, MethodDef, SchemaProvider, ServiceDef, Type,
+use codegen_schema::{
+    EnumDef, EnumValue, FieldDef, MessageDef, MethodDef, SchemaProvider, ServiceDef, StreamingType,
+    Type,
 };
 
 // ---------------------------------------------------------------------------
@@ -25,22 +26,22 @@ pub enum ProtobufAdapterError {
 // ---------------------------------------------------------------------------
 
 /// Map protobuf field type to IR scalar type.
-fn proto_type_to_scalar(type_str: &str) -> Option<codegen_core::ir::ScalarType> {
+fn proto_type_to_scalar(type_str: &str) -> Option<codegen_schema::ScalarType> {
     match type_str {
         // Integer types
-        "int32" | "sint32" | "sfixed32" => Some(codegen_core::ir::ScalarType::Int32),
-        "int64" | "sint64" | "sfixed64" => Some(codegen_core::ir::ScalarType::Int64),
-        "uint32" | "fixed32" => Some(codegen_core::ir::ScalarType::Uint32),
-        "uint64" | "fixed64" => Some(codegen_core::ir::ScalarType::Uint64),
+        "int32" | "sint32" | "sfixed32" => Some(codegen_schema::ScalarType::Int32),
+        "int64" | "sint64" | "sfixed64" => Some(codegen_schema::ScalarType::Int64),
+        "uint32" | "fixed32" => Some(codegen_schema::ScalarType::Uint32),
+        "uint64" | "fixed64" => Some(codegen_schema::ScalarType::Uint64),
 
         // Floating point
-        "float" => Some(codegen_core::ir::ScalarType::Float32),
-        "double" => Some(codegen_core::ir::ScalarType::Float64),
+        "float" => Some(codegen_schema::ScalarType::Float32),
+        "double" => Some(codegen_schema::ScalarType::Float64),
 
         // Other
-        "bool" => Some(codegen_core::ir::ScalarType::Bool),
-        "string" => Some(codegen_core::ir::ScalarType::String),
-        "bytes" => Some(codegen_core::ir::ScalarType::Bytes),
+        "bool" => Some(codegen_schema::ScalarType::Bool),
+        "string" => Some(codegen_schema::ScalarType::String),
+        "bytes" => Some(codegen_schema::ScalarType::Bytes),
 
         _ => None,
     }
@@ -129,7 +130,7 @@ impl<'a> ProtobufSchema<'a> {
 
         proto_type_to_scalar(type_str)
             .map(Type::Scalar)
-            .unwrap_or(Type::Scalar(codegen_core::ir::ScalarType::Bytes))
+            .unwrap_or(Type::Scalar(codegen_schema::ScalarType::Bytes))
     }
 
     /// Convert a protobuf field to IR FieldDef.
@@ -193,8 +194,7 @@ impl<'a> SchemaProvider for ProtobufSchema<'a> {
 
                 Some(ServiceDef {
                     name: svc_name.clone(),
-                    package: package.clone(),
-                    proto_name: svc_name,
+                    package: Some(package.clone()),
                     methods: svc
                         .method
                         .iter()
@@ -223,11 +223,12 @@ impl<'a> SchemaProvider for ProtobufSchema<'a> {
 
                             Some(MethodDef {
                                 name: to_snake_case(&method_name),
-                                proto_name: method_name,
                                 input_type,
                                 output_type,
-                                client_streaming: m.client_streaming.unwrap_or(false),
-                                server_streaming: m.server_streaming.unwrap_or(false),
+                                streaming: StreamingType::from((
+                                    m.client_streaming.unwrap_or(false),
+                                    m.server_streaming.unwrap_or(false),
+                                )),
                                 codec_path: "crate::codec::Codec".to_string(),
                                 comments: vec![],
                             })
@@ -261,7 +262,6 @@ impl<'a> SchemaProvider for ProtobufSchema<'a> {
                         })
                         .collect(),
                     is_union: false,
-                    is_struct: false,
                     namespace: Some(package.clone()),
                     comments: vec![],
                 })
@@ -412,19 +412,19 @@ mod tests {
         // id is int32
         assert!(matches!(
             person.fields[0].ty,
-            Type::Scalar(codegen_core::ir::ScalarType::Int32)
+            Type::Scalar(codegen_schema::ScalarType::Int32)
         ));
 
         // name is string
         assert!(matches!(
             person.fields[1].ty,
-            Type::Scalar(codegen_core::ir::ScalarType::String)
+            Type::Scalar(codegen_schema::ScalarType::String)
         ));
 
         // emails is repeated string -> Vector<String>
         assert!(matches!(
             &person.fields[2].ty,
-            Type::Vector(inner) if matches!(inner.as_ref(), Type::Scalar(codegen_core::ir::ScalarType::String))
+            Type::Vector(inner) if matches!(inner.as_ref(), Type::Scalar(codegen_schema::ScalarType::String))
         ));
     }
 

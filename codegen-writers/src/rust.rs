@@ -1,7 +1,8 @@
 //! Rust code writer.
 
 use super::{to_pascal_case, to_snake_case, CodeWriter, CodeWriterError};
-use codegen_core::ir::{EnumDef, MessageDef, ServiceDef, Type};
+use codegen_core::{escape_reserved_word, Language};
+use codegen_schema::{EnumDef, MessageDef, ScalarType, ServiceDef, StreamingType, Type};
 
 /// Code writer for Rust.
 #[derive(Default)]
@@ -15,25 +16,35 @@ impl RustCodeWriter {
     fn write_field_type(ty: &Type) -> String {
         match ty {
             Type::Scalar(scalar) => match scalar {
-                codegen_core::ir::ScalarType::Bool => "bool".to_string(),
-                codegen_core::ir::ScalarType::Int8 => "i8".to_string(),
-                codegen_core::ir::ScalarType::Uint8 => "u8".to_string(),
-                codegen_core::ir::ScalarType::Int16 => "i16".to_string(),
-                codegen_core::ir::ScalarType::Uint16 => "u16".to_string(),
-                codegen_core::ir::ScalarType::Int32 => "i32".to_string(),
-                codegen_core::ir::ScalarType::Uint32 => "u32".to_string(),
-                codegen_core::ir::ScalarType::Int64 => "i64".to_string(),
-                codegen_core::ir::ScalarType::Uint64 => "u64".to_string(),
-                codegen_core::ir::ScalarType::Float32 => "f32".to_string(),
-                codegen_core::ir::ScalarType::Float64 => "f64".to_string(),
-                codegen_core::ir::ScalarType::String => "String".to_string(),
-                codegen_core::ir::ScalarType::Bytes => "Vec<u8>".to_string(),
-                _ => "Opaque".to_string(),
+                ScalarType::Bool => "bool".to_string(),
+                ScalarType::Int8 => "i8".to_string(),
+                ScalarType::Uint8 => "u8".to_string(),
+                ScalarType::Int16 => "i16".to_string(),
+                ScalarType::Uint16 => "u16".to_string(),
+                ScalarType::Int32 => "i32".to_string(),
+                ScalarType::Uint32 => "u32".to_string(),
+                ScalarType::Int64 => "i64".to_string(),
+                ScalarType::Uint64 => "u64".to_string(),
+                ScalarType::Float32 => "f32".to_string(),
+                ScalarType::Float64 => "f64".to_string(),
+                ScalarType::String => "String".to_string(),
+                ScalarType::Bytes => "Vec<u8>".to_string(),
             },
-            Type::Message { name, .. } => to_pascal_case(name),
-            Type::Enum { name, .. } => to_pascal_case(name),
+            Type::Message { name, .. } => {
+                escape_reserved_word(&to_pascal_case(name), Language::Rust)
+            }
+            Type::Enum { name, .. } => escape_reserved_word(&to_pascal_case(name), Language::Rust),
             Type::Vector(inner) => format!("Vec<{}>", Self::write_field_type(inner)),
-            Type::InlineStruct(inner) => Self::write_field_type(inner),
+            Type::Optional(inner) => format!("Option<{}>", Self::write_field_type(inner)),
+            Type::Map { key, value } => {
+                format!(
+                    "std::collections::HashMap<{}, {}>",
+                    Self::write_field_type(key),
+                    Self::write_field_type(value)
+                )
+            }
+            Type::OneOf { name, .. } => escape_reserved_word(&to_pascal_case(name), Language::Rust),
+            Type::ForeignKey(_) => "i64".to_string(), // Foreign keys are typically integer IDs
         }
     }
 
@@ -50,7 +61,8 @@ impl RustCodeWriter {
             output.push_str(&format!("/// {}\n", comment));
         }
 
-        output.push_str(&format!("pub struct {} {{\n", to_pascal_case(&msg.name)));
+        let struct_name = escape_reserved_word(&to_pascal_case(&msg.name), Language::Rust);
+        output.push_str(&format!("pub struct {} {{\n", struct_name));
 
         // Write fields
         for field in &msg.fields {
@@ -58,7 +70,9 @@ impl RustCodeWriter {
                 output.push_str(&format!("    /// {}\n", comment));
             }
             let ty_str = Self::write_field_type(&field.ty);
-            output.push_str(&format!("    pub {}: {},\n", field.name, ty_str));
+            // Field names are snake_case in IR, escape before any transformation
+            let field_name = escape_reserved_word(&field.name, Language::Rust);
+            output.push_str(&format!("    pub {}: {},\n", field_name, ty_str));
         }
 
         output.push_str("}\n");
@@ -74,12 +88,14 @@ impl RustCodeWriter {
         }
 
         output.push_str("#[derive(Debug, Clone)]\n");
-        output.push_str(&format!("pub enum {} {{\n", to_pascal_case(&enm.name)));
+        let enum_name = escape_reserved_word(&to_pascal_case(&enm.name), Language::Rust);
+        output.push_str(&format!("pub enum {} {{\n", enum_name));
 
         // Write variants
         for (i, value) in enm.values.iter().enumerate() {
             let suffix = if i < enm.values.len() - 1 { "," } else { "" };
-            output.push_str(&format!("    {}{}\n", to_pascal_case(&value.name), suffix));
+            let variant_name = escape_reserved_word(&to_pascal_case(&value.name), Language::Rust);
+            output.push_str(&format!("    {}{}\n", variant_name, suffix));
         }
 
         output.push_str("}\n");
@@ -94,23 +110,63 @@ impl RustCodeWriter {
             output.push_str(&format!("/// {}\n", comment));
         }
 
-        output.push_str(&format!("pub struct {} {{\n", to_pascal_case(&svc.name)));
+        let service_name = escape_reserved_word(&to_pascal_case(&svc.name), Language::Rust);
+        output.push_str(&format!("pub struct {} {{\n", service_name));
         output.push_str("    pub codec: (),\n");
         output.push_str("}\n\n");
 
-        output.push_str(&format!("impl {} {{\n", to_pascal_case(&svc.name)));
+        output.push_str(&format!("impl {} {{\n", service_name));
 
         // Write methods
         for method in &svc.methods {
-            let input_type = to_pascal_case(&method.input_type);
-            let output_type = to_pascal_case(&method.output_type);
-            output.push_str(&format!(
-                "    pub fn {}(&self, req: {}) -> Result<{}, Box<dyn std::error::Error>> {{\n",
-                to_snake_case(&method.name),
-                input_type,
-                output_type,
-            ));
-            output.push_str("        todo!(\"implement\")\n");
+            let input_type =
+                escape_reserved_word(&to_pascal_case(&method.input_type), Language::Rust);
+            let output_type =
+                escape_reserved_word(&to_pascal_case(&method.output_type), Language::Rust);
+            let method_name = escape_reserved_word(&to_snake_case(&method.name), Language::Rust);
+
+            match method.streaming {
+                StreamingType::None => {
+                    // Unary: fn method(&self, req: Input) -> Result<Output, Error>
+                    output.push_str(&format!(
+                        "    pub fn {}(&self, req: {}) -> Result<{}, Box<dyn std::error::Error>> {{\n",
+                        method_name,
+                        input_type,
+                        output_type,
+                    ));
+                    output.push_str("        Err(\"unimplemented\".into())\n");
+                }
+                StreamingType::Server => {
+                    // Server streaming: fn method(&self, req: Input) -> Result<Stream<Output>, Error>
+                    output.push_str(&format!(
+                        "    pub fn {}(&self, req: {}) -> Result<futures::Stream<Item = {}> + Send, Box<dyn std::error::Error>> {{\n",
+                        method_name,
+                        input_type,
+                        output_type,
+                    ));
+                    output.push_str("        Ok(futures::stream::pending())\n");
+                }
+                StreamingType::Client => {
+                    // Client streaming: fn method(&self, req: Stream<Input>) -> Result<Output, Error>
+                    output.push_str(&format!(
+                        "    pub fn {}(&self, req: futures::Stream<Item = {}> + Send) -> Result<{}, Box<dyn std::error::Error>> {{\n",
+                        method_name,
+                        input_type,
+                        output_type,
+                    ));
+                    output.push_str("        Err(\"unimplemented\".into())\n");
+                }
+                StreamingType::BiDi => {
+                    // Bidirectional streaming: fn method(&self, req: Stream<Input>) -> Result<Stream<Output>, Error>
+                    output.push_str(&format!(
+                        "    pub fn {}(&self, req: futures::Stream<Item = {}> + Send) -> Result<futures::Stream<Item = {}> + Send, Box<dyn std::error::Error>> {{\n",
+                        method_name,
+                        input_type,
+                        output_type,
+                    ));
+                    output.push_str("        Ok(futures::stream::pending())\n");
+                }
+            }
             output.push_str("    }\n");
         }
 
@@ -167,7 +223,7 @@ impl CodeWriter for RustCodeWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codegen_core::ir::{FieldDef, ScalarType, Type};
+    use codegen_schema::{EnumValue, FieldDef, ScalarType, Type};
 
     #[test]
     fn test_write_simple_struct() {
@@ -198,19 +254,18 @@ mod tests {
         let enm = EnumDef {
             name: "color".to_string(),
             values: vec![
-                codegen_core::ir::EnumValue {
+                EnumValue {
                     name: "Red".to_string(),
                     value: 0,
                     comments: vec![],
                 },
-                codegen_core::ir::EnumValue {
+                EnumValue {
                     name: "Green".to_string(),
                     value: 1,
                     comments: vec![],
                 },
             ],
             is_union: false,
-            is_struct: false,
             namespace: None,
             comments: vec![],
         };
@@ -237,5 +292,79 @@ mod tests {
             )))),
             "Vec<String>"
         );
+    }
+
+    #[test]
+    fn test_reserved_word_field_escaped() {
+        // Field named "type" should be escaped to "type_"
+        let writer = RustCodeWriter::new();
+        let msg = MessageDef {
+            name: "Data".to_string(),
+            fields: vec![FieldDef {
+                name: "type".to_string(),
+                ty: Type::Scalar(ScalarType::String),
+                is_optional: false,
+                default_value: None,
+                id: Some(1),
+                comments: vec![],
+            }],
+            is_struct: false,
+            namespace: None,
+            comments: vec![],
+        };
+
+        let output = writer.write_struct(&msg);
+        assert!(output.contains("pub type_: String"));
+        assert!(!output.contains("pub type: String"));
+    }
+
+    #[test]
+    fn test_reserved_word_type_escaped() {
+        // Type named "type" (lowercase) should be escaped to "type_"
+        // since "type" is a Rust keyword
+        let writer = RustCodeWriter::new();
+        let msg = MessageDef {
+            name: "type".to_string(),
+            fields: vec![FieldDef {
+                name: "value".to_string(),
+                ty: Type::Scalar(ScalarType::Int32),
+                is_optional: false,
+                default_value: None,
+                id: Some(1),
+                comments: vec![],
+            }],
+            is_struct: false,
+            namespace: None,
+            comments: vec![],
+        };
+
+        let output = writer.write_struct(&msg);
+        // "type" -> to_pascal_case -> "Type", then case-insensitive escape -> "Type_"
+        assert!(output.contains("pub struct Type_ {\n"));
+        // The unescaped "pub struct Type {" should NOT appear
+        assert!(!output.contains("pub struct Type {"));
+    }
+
+    #[test]
+    fn test_reserved_word_enum_escaped() {
+        // Enum named "enum" (lowercase) should be escaped to "Enum_"
+        let mut writer = RustCodeWriter::new();
+        let enm = EnumDef {
+            name: "enum".to_string(),
+            values: vec![EnumValue {
+                name: "A".to_string(),
+                value: 0,
+                comments: vec![],
+            }],
+            is_union: false,
+            namespace: None,
+            comments: vec![],
+        };
+
+        let output = writer.write_enum(&enm).unwrap();
+        // "enum" -> to_pascal_case -> "Enum", then case-insensitive escape -> "Enum_"
+        assert!(output.contains("pub enum Enum_"));
+        // The unescaped "pub enum Enum" should NOT appear
+        assert!(!output.contains("pub enum Enum {"));
     }
 }
