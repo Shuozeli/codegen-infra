@@ -119,6 +119,7 @@ pub fn to_snake_case(s: &str) -> String {
 pub fn to_camel_case(s: &str) -> String {
     let mut result = String::new();
     let mut capitalize_next = false;
+    let mut is_first = true;
     for c in s.chars() {
         if c == '_' {
             capitalize_next = true;
@@ -126,7 +127,12 @@ pub fn to_camel_case(s: &str) -> String {
             result.push(c.to_ascii_uppercase());
             capitalize_next = false;
         } else {
-            result.push(c);
+            if is_first {
+                result.push(c.to_ascii_lowercase());
+                is_first = false;
+            } else {
+                result.push(c);
+            }
         }
     }
     result
@@ -159,5 +165,10 @@ mod tests {
         assert_eq!(to_camel_case("hello_world"), "helloWorld");
         assert_eq!(to_camel_case("simple_name"), "simpleName");
         assert_eq!(to_camel_case("grpc_service_name"), "grpcServiceName");
+        // PascalCase input (e.g., from protobuf) should be lowercased
+        assert_eq!(to_camel_case("CreateMonster"), "createMonster");
+        assert_eq!(to_camel_case("GetMonster"), "getMonster");
+        // Consecutive capitals: only first char lowercased
+        assert_eq!(to_camel_case("HTTPServer"), "hTTPServer");
     }
 }

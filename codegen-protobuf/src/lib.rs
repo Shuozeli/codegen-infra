@@ -222,7 +222,8 @@ impl<'a> SchemaProvider for ProtobufSchema<'a> {
                                 .unwrap_or_else(|| "Unknown".to_string());
 
                             Some(MethodDef {
-                                name: to_snake_case(&method_name),
+                                name: method_name,
+                                rust_name: None,
                                 input_type,
                                 output_type,
                                 streaming: StreamingType::from((
@@ -279,18 +280,6 @@ impl<'a> SchemaProvider for ProtobufSchema<'a> {
             .first()
             .and_then(|m| m.name.as_deref())
     }
-}
-
-/// Convert a name to snake_case.
-fn to_snake_case(s: &str) -> String {
-    let mut result = String::new();
-    for (i, c) in s.chars().enumerate() {
-        if c.is_uppercase() && i > 0 {
-            result.push('_');
-        }
-        result.push(c.to_ascii_lowercase());
-    }
-    result
 }
 
 #[cfg(test)]
@@ -398,7 +387,7 @@ mod tests {
         assert_eq!(services.len(), 1);
         assert_eq!(services[0].name, "TestService");
         assert_eq!(services[0].methods.len(), 1);
-        assert_eq!(services[0].methods[0].name, "get_person");
+        assert_eq!(services[0].methods[0].name, "GetPerson");
     }
 
     #[test]
@@ -426,12 +415,5 @@ mod tests {
             &person.fields[2].ty,
             Type::Vector(inner) if matches!(inner.as_ref(), Type::Scalar(codegen_schema::ScalarType::String))
         ));
-    }
-
-    #[test]
-    fn test_to_snake_case() {
-        assert_eq!(to_snake_case("GetPerson"), "get_person");
-        assert_eq!(to_snake_case("CreateUser"), "create_user");
-        assert_eq!(to_snake_case("simple"), "simple");
     }
 }

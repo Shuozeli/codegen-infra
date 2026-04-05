@@ -120,11 +120,50 @@ pub struct ServiceDef {
     pub comments: Vec<String>,
 }
 
+impl ServiceDef {
+    /// Fully-qualified name (e.g., `"helloworld.Greeter"`).
+    pub fn fully_qualified_name(&self) -> String {
+        if let Some(ref pkg) = self.package {
+            format!("{}.{}", pkg, self.name)
+        } else {
+            self.name.clone()
+        }
+    }
+
+    /// Validate this service definition.
+    ///
+    /// Returns a list of problems. An empty vec means the definition is valid.
+    pub fn validate(&self) -> Vec<String> {
+        let mut errors = Vec::new();
+        if self.name.is_empty() {
+            errors.push("service name is empty".into());
+        }
+        for (i, m) in self.methods.iter().enumerate() {
+            if m.name.is_empty() {
+                errors.push(format!("method[{i}] name is empty"));
+            }
+            if m.input_type.is_empty() {
+                errors.push(format!("method[{i}] `{}` input_type is empty", m.name));
+            }
+            if m.output_type.is_empty() {
+                errors.push(format!("method[{i}] `{}` output_type is empty", m.name));
+            }
+        }
+        errors
+    }
+}
+
 /// Method definition.
 #[derive(Debug, Clone)]
 pub struct MethodDef {
+    /// Proto-style method name (e.g., `"SayHello"`).
     pub name: String,
+    /// Optional snake_case name for Rust (e.g., `"say_hello"`).
+    /// If None, code generators should derive it via `name.to_snake_case()`.
+    pub rust_name: Option<String>,
+    /// Fully-qualified input type path (e.g., `"crate::HelloRequest"`).
     pub input_type: String,
+    /// Fully-qualified output type path (e.g., `"crate::HelloReply"`).
     pub output_type: String,
     pub streaming: StreamingType,
     /// The codec path to use (e.g., `"crate::codec::Codec"`).
@@ -150,6 +189,20 @@ impl MethodDef {
             StreamingType::Client => "client streaming",
             StreamingType::BiDi => "bidi streaming",
         }
+    }
+
+    /// gRPC path for this method (e.g., `"/helloworld.Greeter/SayHello"`).
+    pub fn grpc_path(&self, service_fqn: &str) -> String {
+        format!("/{service_fqn}/{}", self.name)
+    }
+
+    /// Get the Rust method name (snake_case).
+    ///
+    /// If `rust_name` is set, use it; otherwise derive from `name`.
+    pub fn rust_name(&self) -> String {
+        self.rust_name
+            .clone()
+            .unwrap_or_else(|| heck::ToSnakeCase::to_snake_case(self.name.as_str()))
     }
 }
 

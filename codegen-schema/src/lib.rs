@@ -671,6 +671,7 @@ mod tests {
     fn service_def_create_with_methods() {
         let method = MethodDef {
             name: "GetItem".to_string(),
+            rust_name: None,
             input_type: "GetItemRequest".to_string(),
             output_type: "GetItemResponse".to_string(),
             streaming: StreamingType::None,
@@ -721,6 +722,7 @@ mod tests {
     fn method_def_create_with_input_output_types() {
         let method = MethodDef {
             name: "GetItem".to_string(),
+            rust_name: None,
             input_type: "GetItemRequest".to_string(),
             output_type: "GetItemResponse".to_string(),
             streaming: StreamingType::None,
@@ -736,6 +738,7 @@ mod tests {
     fn method_def_streaming_type_none() {
         let method = MethodDef {
             name: "Unary".to_string(),
+            rust_name: None,
             input_type: "Request".to_string(),
             output_type: "Response".to_string(),
             streaming: StreamingType::None,
@@ -750,6 +753,7 @@ mod tests {
     fn method_def_streaming_type_server() {
         let method = MethodDef {
             name: "ServerStream".to_string(),
+            rust_name: None,
             input_type: "Request".to_string(),
             output_type: "Response".to_string(),
             streaming: StreamingType::Server,
@@ -764,6 +768,7 @@ mod tests {
     fn method_def_streaming_type_client() {
         let method = MethodDef {
             name: "ClientStream".to_string(),
+            rust_name: None,
             input_type: "Request".to_string(),
             output_type: "Response".to_string(),
             streaming: StreamingType::Client,
@@ -778,6 +783,7 @@ mod tests {
     fn method_def_streaming_type_bidi() {
         let method = MethodDef {
             name: "BiDi".to_string(),
+            rust_name: None,
             input_type: "Request".to_string(),
             output_type: "Response".to_string(),
             streaming: StreamingType::BiDi,

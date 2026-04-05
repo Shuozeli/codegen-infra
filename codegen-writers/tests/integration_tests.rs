@@ -99,7 +99,8 @@ fn make_monster_service() -> ServiceDef {
         package: Some("MyGame".to_string()),
         methods: vec![
             MethodDef {
-                name: "create_monster".to_string(),
+                name: "CreateMonster".to_string(),
+                rust_name: None,
                 input_type: "CreateMonsterRequest".to_string(),
                 output_type: "Monster".to_string(),
                 streaming: StreamingType::None,
@@ -107,7 +108,8 @@ fn make_monster_service() -> ServiceDef {
                 comments: vec![],
             },
             MethodDef {
-                name: "get_monster".to_string(),
+                name: "GetMonster".to_string(),
+                rust_name: None,
                 input_type: "GetMonsterRequest".to_string(),
                 output_type: "Monster".to_string(),
                 streaming: StreamingType::None,
@@ -189,7 +191,8 @@ fn make_test_service() -> ServiceDef {
         name: "TestService".to_string(),
         package: Some("mygame".to_string()),
         methods: vec![MethodDef {
-            name: "get_person".to_string(),
+            name: "GetPerson".to_string(),
+            rust_name: None,
             input_type: "Person".to_string(),
             output_type: "Person".to_string(),
             streaming: StreamingType::None,
@@ -840,7 +843,8 @@ fn test_rust_streaming_methods() {
         name: "UnaryService".to_string(),
         package: Some("test".to_string()),
         methods: vec![MethodDef {
-            name: "get".to_string(),
+            name: "Get".to_string(),
+            rust_name: None,
             input_type: "Request".to_string(),
             output_type: "Response".to_string(),
             streaming: StreamingType::None,
@@ -854,7 +858,8 @@ fn test_rust_streaming_methods() {
         name: "ServerStreamingService".to_string(),
         package: Some("test".to_string()),
         methods: vec![MethodDef {
-            name: "subscribe".to_string(),
+            name: "Subscribe".to_string(),
+            rust_name: None,
             input_type: "Request".to_string(),
             output_type: "Response".to_string(),
             streaming: StreamingType::Server,
@@ -887,7 +892,8 @@ fn test_typescript_streaming_methods() {
         package: Some("test".to_string()),
         methods: vec![
             MethodDef {
-                name: "unary".to_string(),
+                name: "Unary".to_string(),
+                rust_name: None,
                 input_type: "Request".to_string(),
                 output_type: "Response".to_string(),
                 streaming: StreamingType::None,
@@ -895,7 +901,8 @@ fn test_typescript_streaming_methods() {
                 comments: vec![],
             },
             MethodDef {
-                name: "server_stream".to_string(),
+                name: "ServerStream".to_string(),
+                rust_name: None,
                 input_type: "Request".to_string(),
                 output_type: "Response".to_string(),
                 streaming: StreamingType::Server,
@@ -903,7 +910,8 @@ fn test_typescript_streaming_methods() {
                 comments: vec![],
             },
             MethodDef {
-                name: "client_stream".to_string(),
+                name: "ClientStream".to_string(),
+                rust_name: None,
                 input_type: "Request".to_string(),
                 output_type: "Response".to_string(),
                 streaming: StreamingType::Client,
@@ -911,7 +919,8 @@ fn test_typescript_streaming_methods() {
                 comments: vec![],
             },
             MethodDef {
-                name: "bidi_stream".to_string(),
+                name: "BiDiStream".to_string(),
+                rust_name: None,
                 input_type: "Request".to_string(),
                 output_type: "Response".to_string(),
                 streaming: StreamingType::BiDi,

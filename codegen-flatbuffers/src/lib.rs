@@ -6,7 +6,7 @@
 use codegen_core::CodeGenError;
 use codegen_schema::{
     EnumDef, EnumValue, FieldDef, MessageDef, MethodDef, OneOfVariant, ScalarType, SchemaDef,
-    ServiceDef, Type,
+    ServiceDef, StreamingType, Type,
 };
 
 use flatc_rs_schema::resolved::{ResolvedSchema, ResolvedType};
@@ -178,6 +178,34 @@ fn convert_type(rt: &ResolvedType, schema: &ResolvedSchema) -> Result<Type, Code
 }
 
 // ---------------------------------------------------------------------------
+// Streaming attribute parsing
+// ---------------------------------------------------------------------------
+
+/// Parse streaming mode from FlatBuffers attributes.
+///
+/// FlatBuffers uses `streaming: "server"`, `streaming: "client"`,
+/// or `streaming: "bidi"` key-value attributes on RPC methods.
+fn parse_streaming(attrs: &Option<flatc_rs_schema::Attributes>) -> StreamingType {
+    let attrs = match attrs {
+        Some(a) => a,
+        None => return StreamingType::None,
+    };
+
+    for kv in &attrs.entries {
+        if kv.key.as_deref() == Some("streaming") {
+            return match kv.value.as_deref() {
+                Some("server") => StreamingType::Server,
+                Some("client") => StreamingType::Client,
+                Some("bidi") => StreamingType::BiDi,
+                _ => StreamingType::None,
+            };
+        }
+    }
+
+    StreamingType::None
+}
+
+// ---------------------------------------------------------------------------
 // ResolvedSchema -> SchemaDef
 // ---------------------------------------------------------------------------
 
@@ -295,15 +323,14 @@ pub fn from_resolved_schema(schema: &ResolvedSchema) -> Result<SchemaDef, CodeGe
                     let req = &schema.objects[request_idx];
                     let res = &schema.objects[response_idx];
 
-                    // NOTE: FlatBuffers IDL does not support streaming RPC.
-                    // All RPC calls are unary (request/response), so we always
-                    // set streaming to (false, false). There is no attribute in
-                    // the FlatBuffers schema to indicate streaming capability.
+                    // NOTE: FlatBuffers supports streaming via attributes:
+                    // streaming: "server", "client", or "bidi"
                     Ok(MethodDef {
                         name: c.name.clone(),
+                        rust_name: None,
                         input_type: req.name.clone(),
                         output_type: res.name.clone(),
-                        streaming: (false, false).into(),
+                        streaming: parse_streaming(&c.attributes),
                         // FlatBuffers does not have a concept of codec path in its
                         // schema. We use a default that can be overridden by the
                         // code generator or user configuration.
