@@ -4,54 +4,57 @@ Unified code generation infrastructure for Rust.
 
 ## Overview
 
-A low-level Rust library providing shared primitives for code generation across multiple schema formats.
+A **pure framework** for code generation. This repo provides the core primitives and traits; schema-specific adapters live in their respective repositories.
 
 ## Structure
 
 ```
 codegen-infra/
-├── codegen-core/        # Shared primitives (no external deps except thiserror)
-├── codegen-flatbuffers/ # FlatBuffers schema adapter
-├── codegen-protobuf/    # Protobuf schema adapter
-└── codegen-quiver/      # Quiver-ORM schema adapter
+├── codegen-core/      # Shared primitives (zero external deps)
+├── codegen-schema/    # Format-agnostic schema types
+└── codegen-writers/    # Language code writers
 ```
+
+**Schema adapters are in their respective repos:**
+- `codegen-flatbuffers` → [flatbuffers-rs](https://github.com/Shuozeli/flatbuffers-rs)
+- `codegen-protobuf` → [protobuf-rs](https://github.com/Shuozeli/protobuf-rs)
+- `codegen-quiver` → [quiver-orm](https://github.com/Shuozeli/quiver-orm)
 
 ## Quick Start
 
 ```rust
-use codegen_core::{CodeWriter, CodeGenError, ir::ServiceDef};
+use codegen_core::CodeWriter;
+use codegen_schema::{SchemaDef, SchemaProvider};
+use codegen_writers::RustCodeWriter;
 
-// Create a code writer
-let mut writer = CodeWriter::new();
+// Schema-specific adapter (from flatbuffers-rs, protobuf-rs, etc.)
+use codegen_flatbuffers::from_resolved_schema;
+
+// Convert schema to generic representation
+let schema_def: SchemaDef = from_resolved_schema(&resolved)?;
 
 // Generate code
-writer.block("struct MyService", |w| {
-    w.line("fn new() -> Self {");
-    w.indent();
-    w.line("Self {}");
-    w.dedent();
-    w.line("}");
-});
-
-let code = writer.finish();
+let mut writer = CodeWriter::new(Indent::FourSpaces);
+let mut code_writer = RustCodeWriter::new(&mut writer);
+let output = code_writer.write_file(&schema_def.messages, &schema_def.enums, &schema_def.services)?;
 ```
 
 ## Design Principles
 
 1. **Zero external dependencies** in core (except `thiserror` for derive)
-2. **Feature-gated modules** for different schema formats
-3. **Schema-agnostic IR** that adapters can convert to
-4. **Adapter Pattern**: Each schema format has its own adapter
+2. **Schema-agnostic IR** that adapters can convert to
+3. **Adapter Pattern**: Each schema format has its own adapter in its repo
+4. **Language writers**: Language-specific output in codegen-writers
 
-## IR Types
+## Core Types
 
-- `ServiceDef` - gRPC service definition
-- `MethodDef` - single RPC method
+- `SchemaDef` - complete schema with messages, enums, services
 - `MessageDef` - message/struct/table definition
 - `FieldDef` - field within a message
-- `Type` - scalar, message, enum, or vector types
 - `EnumDef` - enum/union definition
-- `EnumValue` - single enum value
+- `ServiceDef` - gRPC service definition
+- `MethodDef` - single RPC method
+- `Type` - scalar, message, enum, vector, optional, oneof types
 
 ## Building
 
@@ -65,8 +68,3 @@ cargo clippy
 ## Design
 
 See [DESIGN.md](DESIGN.md) for detailed architecture documentation.
-
-## Features
-
-- `codegen-core/grpc` - enables gRPC-specific IR types
-- `codegen-flatbuffers/grpc` - enables gRPC service support in FlatBuffers adapter
